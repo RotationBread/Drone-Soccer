@@ -36,15 +36,15 @@ textarea{
 }
 
 #brightness {
-    border: white solid 1px;
+    border: darkgrey solid 1px;
 }
 
 #delta {
-    border: white solid 1px;
+    border: darkgrey solid 1px;
 }
 
 #freq {
-    border: white solid 1px;
+    border: darkgrey solid 1px;
 }
 
 /* Color editor improvements */
@@ -59,8 +59,9 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 .brightness-preview{width:60px;height:16px;border:1px solid #333;border-radius:3px;background:#111}
 .rainbox{flex:1;height:48px}
 .disabled{
-  opacity:0.35;
+  opacity:0.1;
   pointer-events:none;
+  display:none;
 }
 </style>
 </head>
@@ -83,6 +84,21 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
   <option value="dynamic">Dynamic</option>
   <option value="rainbow">Rainbow</option>
 </select>
+
+<label style="margin-top:15px;display:flex;align-items:center;gap:8px;">
+  <input type="checkbox" id="enableFrontLED" checked>
+  Enable Front LED's
+</label>
+
+<label style="display:flex;align-items:center;gap:8px;">
+  <input type="checkbox" id="enableBackLED" checked>
+  Enable Back LED's
+</label>
+
+<label style="display:flex;align-items:center;gap:8px;">
+  <input type="checkbox" id="enableExtraLED">
+  Enable Extra LED's
+</label>
 
 <div id="rainbowControls">
 <label>Rainbow Delta: <span id="deltaVal">11</span></label>
@@ -120,7 +136,7 @@ const ledBase = [
 "led 5 8,2::CT:1",
 "led 6 9,3::CT:1",
 "led 7 10,4::CT:1",
-"led 8 11,5::CT:1",
+"led 8 11,5::CT:13",
 "led 9 12,6::CT:13",
 "led 10 12,7::CT:13",
 "led 11 12,8::CT:13",
@@ -132,11 +148,11 @@ const ledBase = [
 "led 17 6,12::CT:1",
 "led 18 5,11::CT:1",
 "led 19 4,10::CT:1",
-"led 20 3,9::CT:5",
-"led 21 2,8::CT:5",
-"led 22 2,7::CT:5",
-"led 23 2,6::CT:5",
-"led 24 3,5::CT:5",
+"led 20 3,9::CT:9",
+"led 21 2,8::CT:9",
+"led 22 2,7::CT:9",
+"led 23 2,6::CT:9",
+"led 24 3,5::CT:9",
 "led 25 4,4::CT:1",
 "led 26 5,3::CT:1",
 "led 27 6,2::CT:1",
@@ -152,6 +168,37 @@ const colors = {
 8:[0,255,255],9:[0,0,0],10:[240,255,255],11:[0,0,0],
 12:[0,255,255],13:[0,0,0],14:[240,255,255],15:[0,0,0]
 };
+
+const colorLabels = {
+0:'Main LED Red',
+1:'Main LED Off',
+2:'Main LED Blue',
+3:'Extra',
+4:'LED Cap Red',
+5:'LED Cap',  // Dynamic label based on mode
+6:'LED Cap Blue',
+7:'Extra',
+8:'Front LED Red',
+9:'Front LED Off',
+10:'Front LED Blue',
+11:'Extra',
+12:'Back LED Red',
+13:'Back LED Off',
+14:'Back LED Blue',
+15:'Extra'
+};
+
+function getColorLabel(id) {
+  if (id === 5) {
+    const mode = capMode.value;
+    if (mode === 'solid') {
+      return 'LED Cap Color';
+    } else if (mode === 'dynamic') {
+      return 'LED Cap Off';
+    }
+  }
+  return colorLabels[id];
+}
 
 function hsvToCss(h,s,v){
   return `hsl(${h},${s/255*100}%,${v/255*50}%)`;
@@ -195,7 +242,7 @@ function buildColorUI(){
       <div class="preview" id="prev${id}"></div>
       <div style="flex:1">
         <div style="display:flex;justify-content:space-between;align-items:center">
-          <div>Color ${id}</div>
+          <div><span class="color-label" data-color-id="${id}">${getColorLabel(id)}</span></div>
           <div class="slider-values">
             H <span class="val">${colors[id][0]}</span>
             S <span class="val">${colors[id][1]}</span>
@@ -238,6 +285,9 @@ function updatePreview(id){
 
 function applyMode(){
   const mode=capMode.value;
+  const enableFront=enableFrontLED.checked;
+  const enableBack=enableBackLED.checked;
+  const enableExtra=enableExtraLED.checked;
 
   document.querySelectorAll("#colorContainer > div").forEach(row=>{
     const id=+row.dataset.id;
@@ -245,6 +295,27 @@ function applyMode(){
       if(mode==="solid") row.classList.toggle("disabled", id!==5);
       else if(mode==="dynamic") row.classList.remove("disabled");
       else row.classList.add("disabled");
+    }
+    // Update color 5 label when mode changes
+    if(id===5){
+      const label = row.querySelector('.color-label');
+      if(label) label.textContent = getColorLabel(id);
+    }
+    // Disable/enable based on LED settings
+    if(!enableFront && [8,9,10].includes(id)){
+      row.classList.add("disabled");
+    } else if(enableFront && [8,9,10].includes(id)){
+      row.classList.remove("disabled");
+    }
+    if(!enableBack && [12,13,14].includes(id)){
+      row.classList.add("disabled");
+    } else if(enableBack && [12,13,14].includes(id)){
+      row.classList.remove("disabled");
+    }
+    if(!enableExtra && [3,7,11,15].includes(id)){
+      row.classList.add("disabled");
+    } else if(enableExtra && [3,7,11,15].includes(id)){
+      row.classList.remove("disabled");
     }
   });
 
@@ -258,13 +329,27 @@ function updateCLI(){
   const mode=capMode.value;
   const func = mode==="solid"?"C":
                mode==="dynamic"?"CT":"CY";
+  const enableFront=enableFrontLED.checked;
+  const enableBack=enableBackLED.checked;
 
   let output="# led\n";
-  ledBase.forEach(line=>{
-    if(line.includes("FUNC")){
-      output+=line.replace("FUNC",func)+"\n";
+  ledBase.forEach((line, index)=>{
+    let modifiedLine = line;
+    
+    // Handle LED color index changes based on enable/disable settings
+    // LEDs 20-24: change ::CT:9 to ::CT:1 if Front LEDs disabled
+    if(!enableFront && index >= 20 && index <= 24) {
+      modifiedLine = modifiedLine.replace("::CT:9", "::CT:1");
+    }
+    // LEDs 8-12: change ::CT:13 to ::CT:1 if Back LEDs disabled
+    if(!enableBack && index >= 8 && index <= 12) {
+      modifiedLine = modifiedLine.replace("::CT:13", "::CT:1");
+    }
+    
+    if(modifiedLine.includes("FUNC")){
+      output+=modifiedLine.replace("FUNC",func)+"\n";
     } else {
-      output+=line+"\n";
+      output+=modifiedLine+"\n";
     }
   });
 
@@ -297,6 +382,9 @@ freq.oninput=()=>{
   startRainbowAnim();
 };
 capMode.onchange=applyMode;
+enableFrontLED.onchange=applyMode;
+enableBackLED.onchange=applyMode;
+enableExtraLED.onchange=applyMode;
 
 buildColorUI();
 applyMode();
