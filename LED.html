@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Full Betaflight LED CLI Editor</title>
+<style>
+body{
+  background:#111;
+  color:#eee;
+  font-family:Arial;
+  margin:20px;
+}
+.section{
+  border:1px solid #333;
+  padding:15px;
+  margin-bottom:20px;
+  border-radius:6px;
+}
+h2{margin-top:0;}
+input[type=range]{width:100%;}
+textarea{
+  width:100%;
+  height:400px;
+  background:#0a0a0a;
+  color:#8ff;
+  font-family:monospace;
+  padding:10px;
+}
+.preview{
+  width:30px;
+  height:30px;
+  border:1px solid #444;
+  display:inline-block;
+  vertical-align:middle;
+  margin-right:10px;
+}
+
+/* Color editor improvements */
+.color-row{display:flex;align-items:center;gap:12px;padding:10px;margin-bottom:10px;border-radius:6px;background:linear-gradient(180deg,#0f0f11,#0b0b0d);border:1px solid #222}
+.color-row .preview{width:40px;height:40px;border-radius:4px;border:1px solid #333;box-shadow:0 2px 6px rgba(0,0,0,0.6)}
+input[type=range]{-webkit-appearance:none;height:10px;background:transparent;border-radius:6px}
+input[type=range]::-webkit-slider-runnable-track{height:10px;border-radius:6px}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:#fff;border:2px solid #333;margin-top:-3px}
+.slider-values{font-size:12px;color:#9aa;margin-left:6px}
+.big-range{height:14px}
+.big-range::-webkit-slider-thumb{width:20px;height:20px;margin-top:-5px}
+.brightness-preview{width:60px;height:16px;border:1px solid #333;border-radius:3px;background:#111}
+.rainbox{flex:1;height:48px}
+.disabled{
+  opacity:0.35;
+  pointer-events:none;
+}
+</style>
+</head>
+<body>
+
+<h1>Betaflight LED CLI Editor</h1>
+
+<div class="section">
+<h2>Master Settings</h2>
+
+<label>Brightness: <span id="brightVal">99</span></label>
+<div style="display:flex;align-items:center;gap:12px">
+  <input type="range" min="0" max="100" value="99" id="brightness" class="big-range">
+  <div id="brightnessPreview" style="width:60px;height:16px;border:1px solid #333;border-radius:3px;background:#fff"></div>
+</div>
+
+<label>LED Cap Mode</label>
+<select id="capMode">
+  <option value="solid">Solid</option>
+  <option value="dynamic">Dynamic</option>
+  <option value="rainbow">Rainbow</option>
+</select>
+
+<div id="rainbowControls">
+<label>Rainbow Delta: <span id="deltaVal">11</span></label>
+<input type="range" min="1" max="360" value="11" id="delta">
+
+<label>Rainbow Freq (Hz): <span id="freqVal">21</span></label>
+<input type="range" min="1" max="360" value="21" id="freq">
+
+  <div id="rainbowPreview" style="margin-top:10px;display:flex;width:240px;height:48px;border-radius:4px;overflow:hidden;border:1px solid #222">
+    <div class="rainbox"></div>
+    <div class="rainbox"></div>
+    <div class="rainbox"></div>
+    <div class="rainbox"></div>
+  </div>
+</div>
+</div>
+
+<div class="section">
+<h2>Color Editor (HSV)</h2>
+<div id="colorContainer"></div>
+</div>
+
+<div class="section">
+<h2>Full CLI Output</h2>
+<textarea id="cli" readonly></textarea>
+</div>
+
+<script>
+const ledBase = [
+"led 0 7,6::FUNC:5",
+"led 1 8,7::FUNC:5",
+"led 2 7,8::FUNC:5",
+"led 3 6,7::FUNC:5",
+"led 4 7,2::CT:1",
+"led 5 8,2::CT:1",
+"led 6 9,3::CT:1",
+"led 7 10,4::CT:1",
+"led 8 11,5::CT:1",
+"led 9 12,6::CT:13",
+"led 10 12,7::CT:13",
+"led 11 12,8::CT:13",
+"led 12 11,9::CT:13",
+"led 13 10,10::CT:1",
+"led 14 9,11::CT:1",
+"led 15 8,12::CT:1",
+"led 16 7,12::CT:1",
+"led 17 6,12::CT:1",
+"led 18 5,11::CT:1",
+"led 19 4,10::CT:1",
+"led 20 3,9::CT:5",
+"led 21 2,8::CT:5",
+"led 22 2,7::CT:5",
+"led 23 2,6::CT:5",
+"led 24 3,5::CT:5",
+"led 25 4,4::CT:1",
+"led 26 5,3::CT:1",
+"led 27 6,2::CT:1",
+"led 28 0,0::C:0",
+"led 29 0,0::C:0",
+"led 30 0,0::C:0",
+"led 31 0,0::C:0"
+];
+
+const colors = {
+0:[0,255,255],1:[0,0,0],2:[240,255,255],3:[0,0,0],
+4:[0,255,255],5:[0,0,0],6:[240,255,255],7:[0,0,0],
+8:[0,255,255],9:[0,0,0],10:[240,255,255],11:[0,0,0],
+12:[0,255,255],13:[0,0,0],14:[240,255,255],15:[0,0,0]
+};
+
+function hsvToCss(h,s,v){
+  return `hsl(${h},${s/255*100}%,${v/255*50}%)`;
+}
+
+function updateSliderBackgrounds(row,id){
+  const hEl = row.querySelector('[data-h]');
+  const sEl = row.querySelector('[data-s]');
+  const vEl = row.querySelector('[data-v]');
+  const h = +hEl.value;
+  const s = +sEl.value;
+  const v = +vEl.value;
+
+  // H slider: gradient across hues using current S and V
+  const hueStops = [0,60,120,180,240,300,360].map(hue=>hsvToCss(hue,s,v)).join(',');
+  hEl.style.background = `linear-gradient(to right, ${hueStops})`;
+
+  // S slider: from desaturated to full saturation
+  sEl.style.background = `linear-gradient(to right, ${hsvToCss(h,0,v)}, ${hsvToCss(h,255,v)})`;
+
+  // V slider: from black to full value
+  vEl.style.background = `linear-gradient(to right, ${hsvToCss(h,s,0)}, ${hsvToCss(h,s,255)})`;
+
+  // update numeric tiny displays if present
+  const vals = row.querySelectorAll('.val');
+  if(vals.length===3){
+    vals[0].textContent=h;
+    vals[1].textContent=s;
+    vals[2].textContent=v;
+  }
+}
+
+function buildColorUI(){
+  const container=document.getElementById("colorContainer");
+  container.innerHTML="";
+  Object.keys(colors).forEach(id=>{
+    const row=document.createElement("div");
+    row.className='color-row';
+    row.dataset.id=id;
+    row.innerHTML=`
+      <div class="preview" id="prev${id}"></div>
+      <div style="flex:1">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div>Color ${id}</div>
+          <div class="slider-values">
+            H <span class="val">${colors[id][0]}</span>
+            S <span class="val">${colors[id][1]}</span>
+            V <span class="val">${colors[id][2]}</span>
+          </div>
+        </div>
+        <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;align-items:center">
+          <div>H <input type="range" min="0" max="360" value="${colors[id][0]}" data-h></div>
+          <div>S <input type="range" min="0" max="255" value="${colors[id][1]}" data-s></div>
+          <div>V <input type="range" min="0" max="255" value="${colors[id][2]}" data-v></div>
+        </div>
+      </div>
+    `;
+    container.appendChild(row);
+
+    // wire up inputs
+    row.querySelectorAll("input").forEach(inp=>{
+      inp.oninput=()=>{
+        colors[id]=[
+          +row.querySelector("[data-h]").value,
+          +row.querySelector("[data-s]").value,
+          +row.querySelector("[data-v]").value
+        ];
+        updatePreview(id);
+        updateCLI();
+        updateSliderBackgrounds(row,id);
+      };
+    });
+
+    // initialize preview and slider backgrounds
+    updatePreview(id);
+    updateSliderBackgrounds(row,id);
+  });
+}
+
+function updatePreview(id){
+  document.getElementById("prev"+id)
+    .style.background=hsvToCss(...colors[id]);
+}
+
+function applyMode(){
+  const mode=capMode.value;
+
+  document.querySelectorAll("#colorContainer > div").forEach(row=>{
+    const id=+row.dataset.id;
+    if([4,5,6].includes(id)){
+      if(mode==="solid") row.classList.toggle("disabled", id!==5);
+      else if(mode==="dynamic") row.classList.remove("disabled");
+      else row.classList.add("disabled");
+    }
+  });
+
+  rainbowControls.style.display =
+    mode==="rainbow"?"block":"none";
+
+  updateCLI();
+}
+
+function updateCLI(){
+  const mode=capMode.value;
+  const func = mode==="solid"?"C":
+               mode==="dynamic"?"CT":"CY";
+
+  let output="# led\n";
+  ledBase.forEach(line=>{
+    if(line.includes("FUNC")){
+      output+=line.replace("FUNC",func)+"\n";
+    } else {
+      output+=line+"\n";
+    }
+  });
+
+  output+="\n# color\n";
+  for(let i=0;i<=15;i++){
+    output+=`color ${i} ${colors[i].join(",")}\n`;
+  }
+
+  output+="\n";
+  output+=`set ledstrip_brightness = ${brightness.value}\n`;
+  output+=`set ledstrip_rainbow_delta = ${delta.value}\n`;
+  // freq now represents cycles per second (Hz), one degree per update
+  output+=`set ledstrip_rainbow_freq = ${freq.value}\n`; 
+
+  cli.value=output;
+}
+
+brightness.oninput=()=>{
+  brightVal.textContent=brightness.value;
+  updateCLI();
+};
+delta.oninput=()=>{
+  deltaVal.textContent=delta.value;
+  updateCLI();
+};
+freq.oninput=()=>{
+  freqVal.textContent=freq.value;
+  updateCLI();
+  // restart animation with new Hz
+  startRainbowAnim();
+};
+capMode.onchange=applyMode;
+
+buildColorUI();
+applyMode();
+updateCLI();
+
+// Brightness preview update
+function updateBrightnessPreview(){
+  const b = +brightness.value;
+  // show a white swatch scaled by brightness
+  const el = document.getElementById('brightnessPreview');
+  el.style.background = `hsl(0,0% , ${b}%)`;
+}
+
+// Rainbow animated preview
+let _rainbowBase = 0;
+let _rainbowInterval = null;
+function updateRainbowOnce(){
+  const boxes = document.querySelectorAll('#rainbowPreview .rainbox');
+  const d = +delta.value;
+  // Map brightness (0-100) to HSV V (0-255). When 100 => full color, 0 => black
+  const brightnessPct = (+brightness.value)/100;
+  const v = Math.round(brightnessPct * 255);
+  const s = 255; // full saturation for vivid rainbow squares
+  for(let i=0;i<boxes.length;i++){
+    const hue = (_rainbowBase + i*d) % 360;
+    boxes[i].style.background = hsvToCss(hue, s, v);
+  }
+}
+
+function startRainbowAnim(){
+  if(_rainbowInterval) clearInterval(_rainbowInterval);
+  // frequency slider now represents updates per second (Hz)
+  const hz = +freq.value;
+  const intervalMs = 1000 / hz;
+  _rainbowInterval = setInterval(()=>{
+    // each update increments base hue by exactly one degree
+    _rainbowBase = (_rainbowBase + 1) % 360;
+    updateRainbowOnce();
+  }, intervalMs);
+}
+
+// wire additional updates
+brightness.addEventListener('input',()=>{ updateBrightnessPreview(); updateRainbowOnce(); updateCLI(); });
+delta.addEventListener('input',()=>{ updateRainbowOnce(); updateCLI(); });
+
+// start previews
+updateBrightnessPreview();
+startRainbowAnim();
+</script>
+
+</body>
+</html>
